@@ -1,0 +1,614 @@
+{
+ "version": 1,
+ "app_id": "weather",
+ "description": "Stored modeled weather and bounded historical requests. Weather data by Open-Meteo.com, CC BY 4.0: https://open-meteo.com/en/licence",
+ "connection_file": "../connections/weather.json",
+ "database_user": "weather_mcp",
+ "access": "read_write",
+ "grants": [
+  {
+   "table": "schema_migrations",
+   "privileges": [
+    "SELECT"
+   ]
+  },
+  {
+   "table": "location",
+   "privileges": [
+    "SELECT"
+   ]
+  },
+  {
+   "table": "measurements",
+   "privileges": [
+    "SELECT"
+   ]
+  },
+  {
+   "table": "collector_status",
+   "privileges": [
+    "SELECT"
+   ]
+  },
+  {
+   "table": "backfill_requests",
+   "privileges": [
+    "SELECT",
+    "INSERT"
+   ]
+  }
+ ],
+ "schema_version": {
+  "table": "schema_migrations",
+  "column": "version",
+  "expected": 2
+ },
+ "schema_checks": [
+  {
+   "table": "location",
+   "columns": [
+    "id",
+    "name",
+    "latitude",
+    "longitude",
+    "timezone",
+    "attribution"
+   ]
+  },
+  {
+   "table": "measurements",
+   "columns": [
+    "id",
+    "location_id",
+    "source",
+    "selection",
+    "observed_at",
+    "retrieved_at",
+    "interval_seconds",
+    "temperature_c",
+    "humidity_pct"
+   ]
+  },
+  {
+   "table": "collector_status",
+   "columns": [
+    "location_id",
+    "last_success_at",
+    "last_error_code"
+   ]
+  },
+  {
+   "table": "backfill_requests",
+   "columns": [
+    "request_id",
+    "location_id",
+    "start_date",
+    "end_date",
+    "state",
+    "next_date",
+    "attempts",
+    "checked_hours",
+    "inserted_rows",
+    "last_error_code"
+   ]
+  }
+ ],
+ "tools": [
+  {
+   "name": "list_locations",
+   "description": "List registered location IDs, names, coordinates, time zones and modeled-weather attribution. Removing a location from collector configuration preserves its stored data; this list does not promise active polling.",
+   "kind": "query",
+   "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+   },
+   "sql": "SELECT id AS location_id,name,latitude,longitude,timezone,attribution FROM location ORDER BY id LIMIT ?",
+   "bindings": [
+    {
+     "source": "runtime",
+     "name": "fetch_limit",
+     "db_type": "integer"
+    }
+   ],
+   "fields": [
+    {
+     "name": "location_id",
+     "type": "string"
+    },
+    {
+     "name": "name",
+     "type": "string"
+    },
+    {
+     "name": "latitude",
+     "type": "number"
+    },
+    {
+     "name": "longitude",
+     "type": "number"
+    },
+    {
+     "name": "timezone",
+     "type": "string"
+    },
+    {
+     "name": "attribution",
+     "type": "string"
+    }
+   ],
+   "max_rows": 1000,
+   "default_limit": 1000,
+   "empty_result": "empty"
+  },
+  {
+   "name": "get_latest",
+   "description": "Latest stored current model conditions, not a local sensor. Units: Celsius and percent humidity. Data by Open-Meteo.com (CC BY 4.0). Observation age and retrieval time are distinct.",
+   "kind": "query",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "location_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+     }
+    },
+    "additionalProperties": false,
+    "required": [
+     "location_id"
+    ]
+   },
+   "sql": "SELECT location_id,id,source,selection,observed_at,retrieved_at,interval_seconds,temperature_c,humidity_pct,TIMESTAMPDIFF(SECOND,observed_at,?) AS age_seconds FROM measurements WHERE location_id=? AND source='current' ORDER BY observed_at DESC,id DESC LIMIT ?",
+   "bindings": [
+    {
+     "source": "runtime",
+     "name": "now_utc",
+     "db_type": "timestamp"
+    },
+    {
+     "source": "argument",
+     "name": "location_id",
+     "db_type": "string"
+    },
+    {
+     "source": "runtime",
+     "name": "fetch_limit",
+     "db_type": "integer"
+    }
+   ],
+   "fields": [
+    {
+     "name": "location_id",
+     "type": "string"
+    },
+    {
+     "name": "id",
+     "type": "bigint"
+    },
+    {
+     "name": "source",
+     "type": "string"
+    },
+    {
+     "name": "selection",
+     "type": "string"
+    },
+    {
+     "name": "observed_at",
+     "type": "timestamp"
+    },
+    {
+     "name": "retrieved_at",
+     "type": "timestamp"
+    },
+    {
+     "name": "interval_seconds",
+     "type": "integer",
+     "units": "seconds"
+    },
+    {
+     "name": "temperature_c",
+     "type": "number",
+     "units": "Celsius"
+    },
+    {
+     "name": "humidity_pct",
+     "type": "number",
+     "units": "percent"
+    },
+    {
+     "name": "age_seconds",
+     "type": "integer",
+     "nullable": true,
+     "units": "seconds"
+    }
+   ],
+   "max_rows": 1,
+   "default_limit": 1,
+   "empty_result": "empty"
+  },
+  {
+   "name": "get_history",
+   "description": "Read one explicit stored source over a UTC half-open interval of at most 31 days. Data by Open-Meteo.com (CC BY 4.0). If truncated, split into smaller time ranges; do not treat results as complete or mix sources.",
+   "kind": "query",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "source": {
+      "type": "string",
+      "enum": [
+       "current",
+       "history"
+      ]
+     },
+     "start": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "end": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "default": 500
+     },
+     "location_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+     }
+    },
+    "required": [
+     "location_id",
+     "source",
+     "start",
+     "end"
+    ],
+    "additionalProperties": false
+   },
+   "constraints": [
+    {
+     "kind": "time_range",
+     "start": "start",
+     "end": "end",
+     "max_seconds": 2678400
+    }
+   ],
+   "sql": "SELECT location_id,id,source,selection,observed_at,retrieved_at,interval_seconds,temperature_c,humidity_pct,grid_latitude,grid_longitude,grid_elevation FROM measurements WHERE location_id=? AND source=? AND observed_at>=? AND observed_at<? ORDER BY observed_at,id LIMIT ?",
+   "bindings": [
+    {
+     "source": "argument",
+     "name": "location_id",
+     "db_type": "string"
+    },
+    {
+     "source": "argument",
+     "name": "source",
+     "db_type": "string"
+    },
+    {
+     "source": "argument",
+     "name": "start",
+     "db_type": "timestamp"
+    },
+    {
+     "source": "argument",
+     "name": "end",
+     "db_type": "timestamp"
+    },
+    {
+     "source": "runtime",
+     "name": "fetch_limit",
+     "db_type": "integer"
+    }
+   ],
+   "fields": [
+    {
+     "name": "location_id",
+     "type": "string"
+    },
+    {
+     "name": "id",
+     "type": "bigint"
+    },
+    {
+     "name": "source",
+     "type": "string"
+    },
+    {
+     "name": "selection",
+     "type": "string"
+    },
+    {
+     "name": "observed_at",
+     "type": "timestamp"
+    },
+    {
+     "name": "retrieved_at",
+     "type": "timestamp"
+    },
+    {
+     "name": "interval_seconds",
+     "type": "integer",
+     "units": "seconds"
+    },
+    {
+     "name": "temperature_c",
+     "type": "number",
+     "units": "Celsius"
+    },
+    {
+     "name": "humidity_pct",
+     "type": "number",
+     "units": "percent"
+    },
+    {
+     "name": "grid_latitude",
+     "type": "number",
+     "nullable": true
+    },
+    {
+     "name": "grid_longitude",
+     "type": "number",
+     "nullable": true
+    },
+    {
+     "name": "grid_elevation",
+     "type": "number",
+     "nullable": true,
+     "units": "meters"
+    }
+   ],
+   "max_rows": 1000,
+   "default_limit": 500,
+   "limit_argument": "limit",
+   "empty_result": "empty"
+  },
+  {
+   "name": "get_status",
+   "description": "Read the selected registered location and last persisted collection health. No local spool exists; database outages can lose current snapshots. Weather attribution: https://open-meteo.com/en/licence",
+   "kind": "query",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "location_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+     }
+    },
+    "additionalProperties": false,
+    "required": [
+     "location_id"
+    ]
+   },
+   "sql": "SELECT l.id AS location_id,l.name AS location_name,l.latitude AS latitude,l.longitude AS longitude,l.timezone AS timezone,l.attribution AS attribution,s.last_attempt_at AS last_attempt_at,s.last_success_at AS last_success_at,s.next_attempt_at AS next_attempt_at,s.provider_not_before AS provider_not_before,s.failures AS failures,s.last_error_code AS last_error_code FROM location l JOIN collector_status s ON s.location_id=l.id WHERE l.id=? ORDER BY l.id LIMIT ?",
+   "bindings": [
+    {
+     "source": "argument",
+     "name": "location_id",
+     "db_type": "string"
+    },
+    {
+     "source": "runtime",
+     "name": "fetch_limit",
+     "db_type": "integer"
+    }
+   ],
+   "fields": [
+    {
+     "name": "location_id",
+     "type": "string"
+    },
+    {
+     "name": "location_name",
+     "type": "string"
+    },
+    {
+     "name": "latitude",
+     "type": "number"
+    },
+    {
+     "name": "longitude",
+     "type": "number"
+    },
+    {
+     "name": "timezone",
+     "type": "string"
+    },
+    {
+     "name": "attribution",
+     "type": "string"
+    },
+    {
+     "name": "last_attempt_at",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "last_success_at",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "next_attempt_at",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "provider_not_before",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "failures",
+     "type": "integer"
+    },
+    {
+     "name": "last_error_code",
+     "type": "string"
+    }
+   ],
+   "max_rows": 1,
+   "default_limit": 1,
+   "empty_result": "empty"
+  },
+  {
+   "name": "request_backfill",
+   "description": "Queue inclusive calendar dates in the selected location’s IANA timezone, from 1940, at most 366 days. Use a new lowercase UUIDv4 per intentional request. Success only acknowledges the queue INSERT, not weather availability. The worker rejects dates later than yesterday. After an uncertain commit or duplicate error, query get_backfill with the same UUID and compare location_id and dates before retrying. Requires weather:write consent.",
+   "kind": "execute",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "request_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+     },
+     "start_date": {
+      "type": "string",
+      "format": "date"
+     },
+     "end_date": {
+      "type": "string",
+      "format": "date"
+     },
+     "location_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+     }
+    },
+    "required": [
+     "location_id",
+     "request_id",
+     "start_date",
+     "end_date"
+    ],
+    "additionalProperties": false
+   },
+   "sql": "INSERT INTO backfill_requests(request_id,location_id,start_date,end_date) VALUES(?,?,?,?)",
+   "bindings": [
+    {
+     "source": "argument",
+     "name": "request_id",
+     "db_type": "string"
+    },
+    {
+     "source": "argument",
+     "name": "location_id",
+     "db_type": "string"
+    },
+    {
+     "source": "argument",
+     "name": "start_date",
+     "db_type": "date"
+    },
+    {
+     "source": "argument",
+     "name": "end_date",
+     "db_type": "date"
+    }
+   ],
+   "min_affected_rows": 1,
+   "max_affected_rows": 1,
+   "destructive": false,
+   "idempotent": false
+  },
+  {
+   "name": "get_backfill",
+   "description": "Read a caller-known request UUID, requested dates, committed progress, scheduling, and fixed error code. Partial readings can persist for failed jobs. A failed job is not retried automatically; use a new UUID for an intentional new request.",
+   "kind": "query",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "request_id": {
+      "type": "string",
+      "format": "uuid"
+     }
+    },
+    "required": [
+     "request_id"
+    ],
+    "additionalProperties": false
+   },
+   "sql": "SELECT location_id,request_id,start_date,end_date,state,created_at,started_at,completed_at,available_at,next_date,attempts,checked_hours,inserted_rows,last_error_code FROM backfill_requests WHERE request_id=? ORDER BY request_id LIMIT ?",
+   "bindings": [
+    {
+     "source": "argument",
+     "name": "request_id",
+     "db_type": "string"
+    },
+    {
+     "source": "runtime",
+     "name": "fetch_limit",
+     "db_type": "integer"
+    }
+   ],
+   "fields": [
+    {
+     "name": "location_id",
+     "type": "string"
+    },
+    {
+     "name": "request_id",
+     "type": "string"
+    },
+    {
+     "name": "start_date",
+     "type": "date"
+    },
+    {
+     "name": "end_date",
+     "type": "date"
+    },
+    {
+     "name": "state",
+     "type": "string"
+    },
+    {
+     "name": "created_at",
+     "type": "timestamp"
+    },
+    {
+     "name": "started_at",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "completed_at",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "available_at",
+     "type": "timestamp"
+    },
+    {
+     "name": "next_date",
+     "type": "date",
+     "nullable": true
+    },
+    {
+     "name": "attempts",
+     "type": "integer"
+    },
+    {
+     "name": "checked_hours",
+     "type": "bigint"
+    },
+    {
+     "name": "inserted_rows",
+     "type": "bigint"
+    },
+    {
+     "name": "last_error_code",
+     "type": "string"
+    }
+   ],
+   "max_rows": 1,
+   "default_limit": 1,
+   "empty_result": "not_found"
+  }
+ ]
+}

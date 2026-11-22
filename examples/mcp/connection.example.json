@@ -1,0 +1,1 @@
+{"socket":"/run/mysqld/mysqld.sock","database":"weatheragent","credentials_file":"../credentials/weather.json"}

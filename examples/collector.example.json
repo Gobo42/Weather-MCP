@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "locations": [
+    {"id":"home","name":"Example west","latitude":40.0,"longitude":-105.0,"timezone":"America/Los_Angeles"},
+    {"id":"east","name":"Example east","latitude":41.0,"longitude":-74.0,"timezone":"America/New_York"}
+  ],
+  "poll_seconds": 900,
+  "log_level": "info",
+  "mariadb_file": "mariadb.json",
+  "state_dir": "/var/lib/weather-agent"
+}

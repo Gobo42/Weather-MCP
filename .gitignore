@@ -1,0 +1,15 @@
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+GEMINI.md
+.agents/
+.codex/
+.claude/
+.gemini/
+superpowers/
+/config/
+/dist/
+/bin/
+/.cache/
+*.test
+__pycache__/

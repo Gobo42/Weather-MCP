@@ -1,0 +1,24 @@
+[Unit]
+Description=Open-Meteo Weather Agent
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=weatheragent
+Group=weatheragent
+ExecStart=/usr/local/bin/weather-agent collect --config /etc/weather-agent/collector.json
+Restart=on-failure
+RestartSec=30
+StateDirectory=weather-agent
+StateDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/weather-agent
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
